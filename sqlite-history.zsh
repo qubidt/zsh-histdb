@@ -18,6 +18,7 @@ typeset -g HISTDB_INODE=()
 typeset -g HISTDB_SESSION=""
 typeset -g HISTDB_HOST=""
 typeset -g HISTDB_INSTALLED_IN="${(%):-%N}"
+typeset -Ag histcmd_histdb
 
 
 
@@ -123,16 +124,18 @@ _histdb_update_outcome () {
     local -i retval=$?
     local -F finished=$EPOCHREALTIME
     [[ -z "${HISTDB_SESSION}" ]] && return
+    [[ -z "${histcmd_histdb[$HISTCMD]}" ]] && return
 
     _histdb_init
     _histdb_query_batch <<EOF &|
 update history set
       exit_status = ${retval},
       duration = ${finished} - start_time
-where id = (select max(id) from history) and
+where id = ${histcmd_histdb[$HISTCMD]} and
       session = ${HISTDB_SESSION} and
       exit_status is NULL;
 EOF
+    unset histcmd_histdb[$HISTCMD]
 }
 
 _histdb_addhistory () {
@@ -150,24 +153,32 @@ _histdb_addhistory () {
     _histdb_init
 
     if [[ "$cmd" != "''" ]]; then
-        _histdb_query_batch <<EOF &|
-insert into commands (argv) values (${cmd});
-insert into places   (host, dir) values (${HISTDB_HOST}, ${pwd});
-insert into history
-  (session, command_id, place_id, start_time)
-select
-  ${HISTDB_SESSION},
-  commands.id,
-  places.id,
-  ${started}
-from
-  commands, places
-where
-  commands.argv = ${cmd} and
-  places.host = ${HISTDB_HOST} and
-  places.dir = ${pwd}
+        local -i hist_id
+        hist_id=$(_histdb_query_batch <<EOF
+with
+command (id) as (
+    insert into commands (argv)
+    values (${cmd})
+    returning id
+),
+place (id) as (
+    insert into places (host, dir)
+    values (${HISTDB_HOST}, ${pwd})
+    on conflict (host, dir) do update set dir = excluded.dir
+    returning id
+)
+insert into history (session, command_id, place_id, start_time)
+values (
+    ${HISTDB_SESSION},
+    (select id from command),
+    (select id from place),
+    ${started}
+)
+returning id
 ;
 EOF
+)
+        histcmd_histdb[$HISTCMD]=$hist_id
     fi
     return 0
 }
