@@ -1,6 +1,6 @@
 which sqlite3 >/dev/null 2>&1 || return;
 
-zmodload zsh/datetime # for EPOCHSECONDS
+zmodload zsh/datetime # for EPOCHREALTIME
 zmodload zsh/system # for sysopen
 builtin which sysopen &>/dev/null || return; # guard against zsh older than 5.0.8.
 
@@ -80,15 +80,15 @@ _histdb_init () {
             mkdir -p -- "$hist_dir"
         fi
         _histdb_query <<-EOF
-create table commands (id integer primary key autoincrement, argv text, unique(argv) on conflict ignore);
-create table places   (id integer primary key autoincrement, host text, dir text, unique(host, dir) on conflict ignore);
+create table commands (id integer primary key autoincrement, argv text, unique(argv) on conflict ignore) strict;
+create table places   (id integer primary key autoincrement, host text, dir text, unique(host, dir) on conflict ignore) strict;
 create table history  (id integer primary key autoincrement,
                        session int,
                        command_id int references commands (id),
                        place_id int references places (id),
                        exit_status int,
-                       start_time int,
-                       duration int);
+                       start_time real,
+                       duration real) strict;
 PRAGMA user_version = 2;
 EOF
     fi
@@ -120,8 +120,8 @@ if [[ -z "${HISTDB_TABULATE_CMD[*]:-}" ]]; then
 fi
 
 _histdb_update_outcome () {
-    local retval=$?
-    local finished=$EPOCHSECONDS
+    local -i retval=$?
+    local -F finished=$EPOCHREALTIME
     [[ -z "${HISTDB_SESSION}" ]] && return
 
     _histdb_init
@@ -136,6 +136,7 @@ EOF
 }
 
 _histdb_addhistory () {
+    local -F started=$EPOCHREALTIME
     local cmd="${1[0, -2]}"
 
     for boring in "${_BORING_COMMANDS[@]}"; do
@@ -146,7 +147,6 @@ _histdb_addhistory () {
 
     local cmd="'$(sql_escape $cmd)'"
     local pwd="'$(sql_escape ${PWD})'"
-    local started=$EPOCHSECONDS
     _histdb_init
 
     if [[ "$cmd" != "''" ]]; then
@@ -208,7 +208,7 @@ histdb-sync () {
     # this ought to apply to other readers?
     echo "truncating WAL"
     echo 'pragma wal_checkpoint(truncate);' | _histdb_query_batch
-    
+
     local hist_dir="${HISTDB_FILE:h}"
     if [[ -d "$hist_dir" ]]; then
         () {
