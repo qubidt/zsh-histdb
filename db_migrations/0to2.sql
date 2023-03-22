@@ -27,4 +27,5 @@ ALTER TABLE history_new RENAME TO history;
 PRAGMA foreign_key_check ;
 PRAGMA user_version=2;
 commit;
+VACUUM;
 PRAGMA foreign_keys=ON;
