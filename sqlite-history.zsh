@@ -88,7 +88,8 @@ create table history  (id integer primary key autoincrement,
                        place_id int references places (id),
                        exit_status int,
                        start_time real,
-                       duration real
+                       duration real,
+                       unique(session, command_id, place_id, start_time) on conflict ignore
                        ) strict;
 PRAGMA user_version = 3;
 EOF
@@ -136,6 +137,68 @@ where id = (select max(id) from history) and
 EOF
 }
 
+_histdb_import() {
+    emulate -L zsh
+    # more accurate parsing of history file
+    setopt HIST_LEX_WORDS
+
+    # set local so later fc -p/-P commands don't modify caller's history settings
+    local HISTFILE
+    local HISTSIZE
+    local SAVEHIST
+
+    local _HISTFILE=${1:-$HISTFILE}
+    # push current history list onto a stack and initialize a new one
+    fc -p -a
+    # read all the lines from the given histfile
+    HISTFILE=$_HISTFILE
+    HISTSIZE=999999999
+    SAVEHIST=0
+    fc -R ${1:-$HISTFILE}
+    print "loaded ${#history} lines from history file: $HISTFILE" >&2
+    # unset HISTFILE after reading so we don't (somehow) accidentally write to it
+    HISTFILE=
+
+    local -a histories
+    local -i i=0
+    # history is read into `history` associative array, but we don't have
+    # direct access to timestamps so parse them from `fc -l`
+    fc -l -t %s -d -D 0 | while { read -r histcmd timestamp duration _cmd } {
+        # the command output by `fc -l` is escaped so use $history[$histcmd]
+        #   instead to get the raw, unescaped characters
+        # omit empty commands (not sure how this happens. `print -S` maybe?)
+        [[ -n "${history[$histcmd]}" ]] || continue
+        ((++i))
+        # duration is formatted as m:ss so parse it back into integer seconds
+        # escape the history command
+        histories+=("(${timestamp}, $((${duration%:*}*60 + ${duration#*:})), '${history[$histcmd]//'/''}')")
+    }
+
+    _histdb_init
+
+    result=$(_histdb_query <<EOF
+insert into places   (host, dir) values (${HISTDB_HOST}, '');
+insert into commands (argv) values ${(@pj:,\n:)${(@)${(@uv)history//'/''}/#/('}/%/')};
+with histories (timestamp, duration, cmd) as (values ${(pj:,\n:)histories})
+insert into history (session, command_id, place_id, start_time, duration)
+select
+    ${SESSION:-0},
+    c.id,
+    (select id from places where host = ${HISTDB_HOST} and dir = ''),
+    h.timestamp,
+    h.duration
+from histories h
+    join commands c on c.argv = h.cmd
+on conflict (session, command_id, place_id, start_time)
+    do update set duration = excluded.duration
+    where history.duration != excluded.duration
+returning id
+;
+EOF
+) || return
+    print "Imported ${#${(@f)result}} new history entries"
+}
+
 _histdb_addhistory () {
     local -F started=$EPOCHREALTIME
     local cmd="${1[0, -2]}"
@@ -175,6 +238,7 @@ EOF
 
 add-zsh-hook zshaddhistory _histdb_addhistory
 add-zsh-hook precmd _histdb_update_outcome
+add-zsh-hook zshexit _histdb_update_outcome
 
 histdb-top () {
     _histdb_init
