@@ -27,7 +27,8 @@ sql_escape () {
 
 _histdb_query () {
     sqlite3 -batch -noheader -cmd ".timeout 1000" "${HISTDB_FILE}" "$@"
-    [[ "$?" -ne 0 ]] && echo "error in $@"
+    local ret=$?
+    [[ "$ret" -eq 0 ]] || { echo "error in $@" >&2; return $ret; }
 }
 
 _histdb_stop_sqlite_pipe () {
