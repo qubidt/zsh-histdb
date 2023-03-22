@@ -172,14 +172,15 @@ _histdb_import() {
         ((++i))
         # duration is formatted as m:ss so parse it back into integer seconds
         # escape the history command
-        histories+=("(${timestamp}, $((${duration%:*}*60 + ${duration#*:})), '${history[$histcmd]//'/''}')")
+        histories+=("(${timestamp}, $((${duration%:*}*60 + ${duration#*:})), '${${history[$histcmd]//\'/''}//$'\x00'}')")
     }
 
     _histdb_init
-
+    local result=
     result=$(_histdb_query <<EOF
+begin transaction;
 insert into places   (host, dir) values (${HISTDB_HOST}, '');
-insert into commands (argv) values ${(@pj:,\n:)${(@)${(@uv)history//'/''}/#/('}/%/')};
+insert into commands (argv) values ${(@pj:,\n:)${(@)${(@)${(@uv)history//'/''}//$'\x00'}/#/('}/%/')};
 with histories (timestamp, duration, cmd) as (values ${(pj:,\n:)histories})
 insert into history (session, command_id, place_id, start_time, duration)
 select
@@ -195,6 +196,7 @@ on conflict (session, command_id, place_id, start_time)
     where history.duration != excluded.duration
 returning id
 ;
+commit;
 EOF
 ) || return
     print "Imported ${#${(@f)result}} new history entries"
