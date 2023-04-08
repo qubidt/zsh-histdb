@@ -184,7 +184,7 @@ insert into commands (argv) values ${(@pj:,\n:)${(@)${(@)${(@uv)history//'/''}//
 with histories (timestamp, duration, cmd) as (values ${(pj:,\n:)histories})
 insert into history (session, command_id, place_id, start_time, duration)
 select
-    ${SESSION:-0},
+    ${SESSION:--1},
     c.id,
     (select id from places where host = ${HISTDB_HOST} and dir = ''),
     h.timestamp,
